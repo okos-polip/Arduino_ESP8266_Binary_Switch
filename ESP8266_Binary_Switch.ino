@@ -45,7 +45,8 @@
 //  Preprocessor Constants
 //==============================================================================
 
-#define SWITCH_PIN                      (LED_BUILTIN)
+#define STATUS_LED_PIN                  (LED_BUILTIN)
+#define SWITCH_PIN                      (D1)
 #define RESET_BTN_PIN                   (D0)
 
 #define RESET_BTN_TIME_THRESHOLD        (200L)
@@ -61,7 +62,8 @@
 //==============================================================================
 
 #define readResetBtnState() ((bool)digitalRead(RESET_BTN_PIN))
-#define setSwitchState(state) (digitalWrite(SWITCH_PIN, !(bool)(state))) //Active LOW
+#define setSwitchState(state) (digitalWrite(SWITCH_PIN, (bool)(state))) //Active LOW
+#define writeStatusLED(state) (digitalWrite(STATUS_LED_PIN, !(bool)(state)))
 
 //==============================================================================
 //  Declared Constants
@@ -84,12 +86,11 @@ static polip_device_t _polipDevice;
 static polip_workflow_t _polipWorkflow;
 
 static unsigned long _resetTime;
+static unsigned long  _blinkTime;
 static bool _flag_reset = false;
 static bool _prevBtnState = false;
-static char _rxBuffer[50];
-static int _rxBufferIdx = 0;
+static bool _blinkState = false;
 static bool _currentState = false;
-static unsigned long _pollTime;
 
 //==============================================================================
 //  Private Function Prototypes
@@ -98,6 +99,8 @@ static unsigned long _pollTime;
 static void _pushStateSetup(polip_device_t* dev, JsonDocument& doc);
 static void _pollStateResponse(polip_device_t* dev, JsonDocument& doc);
 static void _errorHandler(polip_device_t* dev, JsonDocument& doc, polip_workflow_source_t source);
+static void _debugSerialInterface(void);
+static unsigned long _blinkDurationByState(void);
 
 //==============================================================================
 //  MAIN
@@ -107,9 +110,11 @@ void setup() {
     Serial.begin(DEBUG_SERIAL_BAUD);
     Serial.flush();
 
+    pinMode(STATUS_LED_PIN, OUTPUT);
     pinMode(SWITCH_PIN, OUTPUT);
     pinMode(RESET_BTN_PIN, INPUT);
     setSwitchState(_currentState);
+    writeStatusLED(_blinkState);
 
     _wifiManager.autoConnect(FALLBACK_AP_NAME);
 
@@ -131,9 +136,11 @@ void setup() {
 
     unsigned long currentTime = millis();
     polip_workflow_initialize(&_polipWorkflow, currentTime);
-    _pollTime = _resetTime = currentTime;
+    _resetTime = currentTime;
     _flag_reset = false;
     _prevBtnState = false;
+
+    Serial.println("---");
 }
 
 void loop() {
@@ -143,10 +150,71 @@ void loop() {
     // Refresh time
     _timeClient.update();
 
-    // Update Polip Server
-    polip_workflow_periodic_update(&_polipWorkflow, _doc, _timeClient.getFormattedTime().c_str(), currentTime);
+    // // Update Polip Server
+    polip_workflow_periodic_update(&_polipWorkflow, _doc, _timeClient.getFormattedDate().c_str(), currentTime);
 
     // Serial debugging interface provides full state control
+    _debugSerialInterface();
+
+    // Handle Reset button
+    bool btnState = readResetBtnState();
+    if (!btnState && _prevBtnState) {
+        _resetTime = currentTime;
+    } else if (btnState && !_prevBtnState) {
+        if ((currentTime - _resetTime) >= RESET_BTN_TIME_THRESHOLD) {
+            Serial.println(F("Reset Button Held"));
+            _flag_reset = true;
+        }
+        // Otherwise button press was debounced.
+    }
+    _prevBtnState = btnState;
+
+     // Reset State Machine
+    if (_flag_reset) {
+        _flag_reset = false;
+        Serial.println(F("Erasing Config, restarting"));
+        _wifiManager.resetSettings();
+        ESP.restart();
+    }
+
+    // Blink the LED at a certain rate dependent on state of purifier
+    //  Useful for debugging
+    if ((currentTime - _blinkTime) > _blinkDurationByState()) {
+        _blinkTime = currentTime;
+        writeStatusLED(_blinkState);
+        _blinkState = !_blinkState;
+    }
+
+    // Update physical state
+    setSwitchState(_currentState);
+    delay(1);
+}
+
+//==============================================================================
+//  Private Function Implementation
+//==============================================================================
+
+static void _pushStateSetup(polip_device_t* dev, JsonDocument& doc) {
+    JsonObject stateObj = doc.createNestedObject("state");
+    stateObj["power"] = _currentState;
+}
+
+static void _pollStateResponse(polip_device_t* dev, JsonDocument& doc) {
+    JsonObject stateObj = doc["state"];
+    _currentState = stateObj["power"];
+}
+
+static void _errorHandler(polip_device_t* dev, JsonDocument& doc, polip_workflow_source_t source) {
+    Serial.print(F("Error Handler ~ polip server error during OP="));
+    Serial.print((int)source);
+    Serial.print(F(" with CODE="));
+    Serial.println((int)_polipWorkflow.flags.error);
+} 
+
+static void _debugSerialInterface(void) {
+    static char _rxBuffer[50];
+    static int _rxBufferIdx = 0;
+
     while (Serial.available() > 0) {
         if (_rxBufferIdx >= (sizeof(_rxBuffer) - 1)) {
             Serial.println(F("Error - Buffer Overflow ~ Clearing"));
@@ -187,50 +255,14 @@ void loop() {
             }
         }
     }
+}
 
-    // Handle Reset button
-    bool btnState = readResetBtnState();
-    if (!btnState && _prevBtnState) {
-        _resetTime = currentTime;
-    } else if (btnState && !_prevBtnState) {
-        if ((currentTime - _resetTime) >= RESET_BTN_TIME_THRESHOLD) {
-            Serial.println(F("Reset Button Held"));
-            _flag_reset = true;
-        }
-        // Otherwise button press was debounced.
+static unsigned long _blinkDurationByState(void) {
+    if (POLIP_WORKFLOW_IN_ERROR(&_polipWorkflow)) {
+        return 1L;
+    } else if (_currentState) {
+        return 500L;
+    } else {
+        return 1000L;
     }
-    _prevBtnState = btnState;
-
-     // Reset State Machine
-    if (_flag_reset) {
-        _flag_reset = false;
-        Serial.println(F("Erasing Config, restarting"));
-        _wifiManager.resetSettings();
-        ESP.restart();
-    }
-
-    // Update physical state
-    setSwitchState(_currentState);
-    delay(1);
 }
-
-//==============================================================================
-//  Private Function Implementation
-//==============================================================================
-
-static void _pushStateSetup(polip_device_t* dev, JsonDocument& doc) {
-    JsonObject stateObj = doc.createNestedObject("state");
-    stateObj["power"] = _currentState;
-}
-
-static void _pollStateResponse(polip_device_t* dev, JsonDocument& doc) {
-    JsonObject stateObj = doc["state"];
-    _currentState = stateObj["power"];
-}
-
-static void _errorHandler(polip_device_t* dev, JsonDocument& doc, polip_workflow_source_t source) {
-    Serial.print(F("Error Handler ~ polip server error during OP="));
-    Serial.print((int)source);
-    Serial.print(F(" with CODE="));
-    Serial.println((int)_polipWorkflow.flags.error);
-} 
