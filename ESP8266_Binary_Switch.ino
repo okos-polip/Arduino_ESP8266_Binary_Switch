@@ -98,7 +98,7 @@ static bool _currentState = false;
 
 static void _pushStateSetup(polip_device_t* dev, JsonDocument& doc);
 static void _pollStateResponse(polip_device_t* dev, JsonDocument& doc);
-static void _errorHandler(polip_device_t* dev, JsonDocument& doc, polip_workflow_source_t source);
+static void _errorHandler(polip_device_t* dev, JsonDocument& doc, polip_workflow_source_t source, polip_ret_code_t error);
 static void _debugSerialInterface(void);
 static unsigned long _blinkDurationByState(void);
 
@@ -204,11 +204,11 @@ static void _pollStateResponse(polip_device_t* dev, JsonDocument& doc) {
     _currentState = stateObj["power"];
 }
 
-static void _errorHandler(polip_device_t* dev, JsonDocument& doc, polip_workflow_source_t source) {
+static void _errorHandler(polip_device_t* dev, JsonDocument& doc, polip_workflow_source_t source, polip_ret_code_t error) {
     Serial.print(F("Error Handler ~ polip server error during OP="));
     Serial.print((int)source);
     Serial.print(F(" with CODE="));
-    Serial.println((int)_polipWorkflow.flags.error);
+    Serial.println((int)error);
 } 
 
 static void _debugSerialInterface(void) {
