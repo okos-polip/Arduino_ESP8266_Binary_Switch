@@ -92,6 +92,8 @@ static bool _prevBtnState = false;
 static bool _blinkState = false;
 static bool _currentState = false;
 
+static char _transmissionBuffer[POLIP_MIN_ARBITRARY_MSG_BUFFER_SIZE];
+
 //==============================================================================
 //  Private Function Prototypes
 //==============================================================================
@@ -128,6 +130,8 @@ void setup() {
     _polipDevice.hardwareStr = HARDWARE_STR;
     _polipDevice.firmwareStr = FIRMWARE_STR;
     _polipDevice.skipTagCheck = false;
+    _polipDevice.buffer = _transmissionBuffer;
+    _polipDevice.bufferLen = sizeof(_transmissionBuffer);
 
     _polipWorkflow.device = &_polipDevice;
     _polipWorkflow.hooks.pushStateSetupCb = _pushStateSetup;
